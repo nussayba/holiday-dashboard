@@ -3,62 +3,136 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 
-# Load Excel file and skip first row to reach actual headers
+# Charger le fichier
 df = pd.read_excel("Time off Report.xlsx", header=1)
-
-# Clean column names
 df.columns = df.columns.str.strip()
 
-# Show column names for debugging
-st.write("Colonnes détectées :", df.columns.tolist())
-
-# Check if required columns exist
-required_cols = ["Solde Contrat", "Available", "NOM", "Prénom"]
-missing = [col for col in required_cols if col not in df.columns]
+# Vérifier les colonnes nécessaires
+required = [
+    "Accrued Factorial", "Taken", "Available",
+    "Accrued", "Taken.1", "Available.1",
+    "Solde Contrat", "NOM", "Prénom"
+]
+missing = [col for col in required if col not in df.columns]
 if missing:
     st.error(f"Colonnes manquantes : {missing}")
 else:
-    # Convert to numeric to avoid plotting errors
-    df["Solde Contrat"] = pd.to_numeric(df["Solde Contrat"], errors="coerce")
-    df["Available"] = pd.to_numeric(df["Available"], errors="coerce")
+    # Renommer pour clarté
+    df = df.rename(columns={
+        "Accrued Factorial": "Accrued_2024",
+        "Taken": "Taken_2024",
+        "Available": "Available_2024",
+        "Accrued": "Accrued_2025",
+        "Taken.1": "Taken_2025",
+        "Available.1": "Available_2025"
+    })
 
-    # Calculate difference
-    df["Difference"] = df["Available"] - df["Solde Contrat"]
+    # Conversion en numérique
+    numeric_cols = [
+        "Accrued_2024", "Taken_2024", "Available_2024",
+        "Accrued_2025", "Taken_2025", "Available_2025",
+        "Solde Contrat"
+    ]
+    for col in numeric_cols:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # Segment employees
-    df["Group"] = df["Difference"].apply(
-        lambda x: "Factorial > Contract" if x > 0 else ("Contract > Factorial" if x < 0 else "Aligned")
+    # ----------------------------------------------------------------------
+    # ✅ 1. Comparaison Solde Contrat vs Accrued 2024
+    # ----------------------------------------------------------------------
+    df["Delta_Contrat"] = df["Accrued_2024"] - df["Solde Contrat"]
+    df["Contrat_Status"] = df["Delta_Contrat"].apply(
+        lambda x: "Accrued > Contrat" if x > 0 else ("Accrued < Contrat" if x < 0 else "Aligné")
     )
 
-    st.title("Holiday Balance Dashboard")
+    st.title("Audit RH – Comparaison Solde Contrat vs Accrued 2024")
 
-    # --- 1. Bar chart of groups ---
-    st.subheader("Répartition des employés par anomalie")
-    st.bar_chart(df["Group"].value_counts())
+    st.subheader("Répartition des écarts")
+    st.bar_chart(df["Contrat_Status"].value_counts())
 
-    # --- 2. Histogram of differences ---
-    st.subheader("Distribution des écarts (jours)")
-    fig1, ax1 = plt.subplots()
-    sns.histplot(df["Difference"].dropna(), bins=20, kde=True, ax=ax1)
-    ax1.set_xlabel("Écart (Factorial - Contrat)")
-    ax1.set_ylabel("Nombre d'employés")
-    st.pyplot(fig1)
+    st.subheader("Distribution des écarts (Accrued_2024 - Solde Contrat)")
+    fig0, ax0 = plt.subplots()
+    sns.histplot(df["Delta_Contrat"].dropna(), bins=20, kde=True, ax=ax0)
+    ax0.set_xlabel("Écart en jours")
+    ax0.set_ylabel("Nombre d'employés")
+    st.pyplot(fig0)
 
-    # --- 3. Scatter plot ---
-    st.subheader("Comparaison des soldes : Contrat vs Factorial")
-    df_clean = df.dropna(subset=["Solde Contrat", "Available", "Group"])
-    fig2, ax2 = plt.subplots()
-    sns.scatterplot(x=df_clean["Solde Contrat"], y=df_clean["Available"], hue=df_clean["Group"], ax=ax2)
-    ax2.plot([df_clean["Solde Contrat"].min(), df_clean["Solde Contrat"].max()],
-             [df_clean["Solde Contrat"].min(), df_clean["Solde Contrat"].max()],
-             'r--')
-    ax2.set_xlabel("Solde Contrat")
-    ax2.set_ylabel("Solde Factorial")
-    st.pyplot(fig2)
+    st.subheader("Écarts triés du plus grand au plus petit")
+    st.dataframe(
+        df.sort_values("Delta_Contrat", ascending=False)[
+            ["NOM", "Prénom", "Accrued_2024", "Solde Contrat", "Delta_Contrat"]
+        ]
+    )
 
-    # --- 4. Top anomalies ---
-    st.subheader("Top 10 écarts positifs (Factorial > Contrat)")
-    st.dataframe(df.nlargest(10, "Difference")[["NOM", "Prénom", "Solde Contrat", "Available", "Difference"]])
+    st.subheader("Écarts triés du plus petit au plus grand")
+    st.dataframe(
+        df.sort_values("Delta_Contrat", ascending=True)[
+            ["NOM", "Prénom", "Accrued_2024", "Solde Contrat", "Delta_Contrat"]
+        ]
+    )
 
-    st.subheader("Top 10 écarts négatifs (Contrat > Factorial)")
-    st.dataframe(df.nsmallest(10, "Difference")[["NOM", "Prénom", "Solde Contrat", "Available", "Difference"]])
+    # ----------------------------------------------------------------------
+    # ✅ 2. Audit interne Factorial 2024 & 2025
+    # ----------------------------------------------------------------------
+    df["Delta_2024"] = df["Accrued_2024"] - (df["Taken_2024"] + df["Available_2024"])
+    df["Delta_2025"] = df["Accrued_2025"] - (df["Taken_2025"] + df["Available_2025"])
+
+    df["Status_2024"] = df["Delta_2024"].apply(
+        lambda x: "Aligné" if abs(x) < 0.01 else ("Excès" if x > 0 else "Déficit")
+    )
+    df["Status_2025"] = df["Delta_2025"].apply(
+        lambda x: "Aligné" if abs(x) < 0.01 else ("Excès" if x > 0 else "Déficit")
+    )
+
+    year = st.selectbox("Choisir l'année à analyser", ["2024", "2025"])
+
+    st.title(f"Audit interne Factorial – {year}")
+
+    if year == "2024":
+        st.subheader("Répartition des écarts internes")
+        st.bar_chart(df["Status_2024"].value_counts())
+
+        st.subheader("Distribution des écarts (Accrued - [Taken + Available])")
+        fig1, ax1 = plt.subplots()
+        sns.histplot(df["Delta_2024"].dropna(), bins=20, kde=True, ax=ax1)
+        ax1.set_xlabel("Écart en jours")
+        ax1.set_ylabel("Nombre d'employés")
+        st.pyplot(fig1)
+
+        st.subheader("Écarts 2024 triés du plus grand au plus petit")
+        st.dataframe(
+            df.sort_values("Delta_2024", ascending=False)[
+                ["NOM", "Prénom", "Accrued_2024", "Taken_2024", "Available_2024", "Delta_2024"]
+            ]
+        )
+
+        st.subheader("Écarts 2024 triés du plus petit au plus grand")
+        st.dataframe(
+            df.sort_values("Delta_2024", ascending=True)[
+                ["NOM", "Prénom", "Accrued_2024", "Taken_2024", "Available_2024", "Delta_2024"]
+            ]
+        )
+
+    else:
+        st.subheader("Répartition des écarts internes")
+        st.bar_chart(df["Status_2025"].value_counts())
+
+        st.subheader("Distribution des écarts (Accrued - [Taken + Available])")
+        fig2, ax2 = plt.subplots()
+        sns.histplot(df["Delta_2025"].dropna(), bins=20, kde=True, ax=ax2)
+        ax2.set_xlabel("Écart en jours")
+        ax2.set_ylabel("Nombre d'employés")
+        st.pyplot(fig2)
+
+        st.subheader("Écarts 2025 triés du plus grand au plus petit")
+        st.dataframe(
+            df.sort_values("Delta_2025", ascending=False)[
+                ["NOM", "Prénom", "Accrued_2025", "Taken_2025", "Available_2025", "Delta_2025"]
+            ]
+        )
+
+        st.subheader("Écarts 2025 triés du plus petit au plus grand")
+        st.dataframe(
+            df.sort_values("Delta_2025", ascending=True)[
+                ["NOM", "Prénom", "Accrued_2025", "Taken_2025", "Available_2025", "Delta_2025"]
+            ]
+        )
